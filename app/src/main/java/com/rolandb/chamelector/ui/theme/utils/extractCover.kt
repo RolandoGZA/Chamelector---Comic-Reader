@@ -40,7 +40,8 @@ object CbrCoverFetcher {
             // 4. Recorrer entradas buscando la portada
             try {
                 while (true) {
-                    Archive.readNextHeader2(archivePtr, entryPtr)
+                    val result = Archive.readNextHeader2(archivePtr, entryPtr)
+                    if (result == Archive.ERRNO_EOF.toLong()) break
 
                     val entryName = ArchiveEntry.pathnameUtf8(entryPtr) ?: continue
 
