@@ -47,6 +47,7 @@ dependencies {
     implementation(libs.androidx.documentfile)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.navigation.compose)
     //Descomprimir archivos RAR (.cbr)
     implementation(libs.junrar)
     // Soporte nativo para RAR4, RAR5, ZIP, CBZ, 7z

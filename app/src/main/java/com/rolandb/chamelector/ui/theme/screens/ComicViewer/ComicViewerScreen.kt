@@ -45,7 +45,7 @@ fun ComicViewerScreen(
             AnimatedVisibility(
                 visible = uiState.isControlsVisible,
                 enter = fadeIn(),
-                exit = fadeOut()
+                exit = fadeOut(),
             ) {
                 TopAppBar(
                     title = { Text(text = comicTitle, maxLines = 1) },
@@ -69,7 +69,7 @@ fun ComicViewerScreen(
             AnimatedVisibility(
                 visible = (uiState.isControlsVisible && uiState.totalPages > 0),
                 enter = fadeIn(),
-                exit = fadeOut()
+                exit = fadeOut(),
             ) {
                 Box(
                     modifier = Modifier
@@ -126,7 +126,7 @@ fun ComicViewerScreen(
                     ) { pageIndex ->
                         ZoomableComicPage(
                             bitmap = uiState.pages[pageIndex],
-                            onTap = { viewModel.toggleControlsVisibility() }
+                            onTap = viewModel::toggleControlsVisibility
                         )
                     }
                 }

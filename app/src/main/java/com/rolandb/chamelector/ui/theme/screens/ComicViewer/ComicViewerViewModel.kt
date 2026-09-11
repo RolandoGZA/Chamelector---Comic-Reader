@@ -26,7 +26,7 @@ data class ComicViewerUiState(
     val totalPages: Int = 0,
     val pages: List<Bitmap> = emptyList(),
     val isControlsVisible: Boolean = true,
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
 )
 
 class ComicViewerViewModel : ViewModel() {
@@ -53,7 +53,7 @@ class ComicViewerViewModel : ViewModel() {
                 _uiState.update {
                     it.copy(
                         isLoading = false,
-                        errorMessage = "No se pudieron extraer las páginas del cómic."
+                        errorMessage = "Error: No se pudieron extraer páginas. Verifica los permisos o el formato del archivo."
                     )
                 }
             }
@@ -85,22 +85,29 @@ class ComicViewerViewModel : ViewModel() {
 
             try {
                 while (true) {
-                    Archive.readNextHeader2(archivePtr, entryPtr)
+                    val result = Archive.readNextHeader2(archivePtr, entryPtr)
+                    if (result == Archive.ERRNO_EOF.toLong()) break
+
                     val entryName = ArchiveEntry.pathnameUtf8(entryPtr) ?: continue
 
                     if (isImageFile(entryName)) {
                         val cleanName = getCleanFileName(entryName)
                         val entryBytes = readEntryData(archivePtr)
-                        pagesMap[cleanName] = entryBytes
+                        if (entryBytes.isNotEmpty()) {
+                            pagesMap[cleanName] = entryBytes
+                        }
+                    } else {
+                        Archive.readDataSkip(archivePtr)
                     }
                 }
-            } catch (_: ArchiveException) {
-                // Fin del archivo o entrada
+            } catch (e: ArchiveException) {
+                e.printStackTrace()
             } finally {
                 ArchiveEntry.free(entryPtr)
             }
         } catch (e: Exception) {
             e.printStackTrace()
+            println("Error en extractAllPages: ${e.message}")
         } finally {
             if (archivePtr != 0L) {
                 try { Archive.readFree(archivePtr) } catch (e: Exception) { e.printStackTrace() }
@@ -126,22 +133,24 @@ class ComicViewerViewModel : ViewModel() {
 
     private fun readEntryData(archivePtr: Long): ByteArray {
         val outputStream = ByteArrayOutputStream()
-        val chunkSize = 8192
+        val chunkSize = 64 * 1024 // 64KB chunks for better performance
         val byteBuffer = ByteBuffer.allocateDirect(chunkSize)
         try {
             while (true) {
                 byteBuffer.clear()
                 Archive.readData(archivePtr, byteBuffer)
                 val bytesRead = byteBuffer.position()
-                if (bytesRead == 0) break
+                if (bytesRead <= 0) break
 
                 byteBuffer.flip()
                 val tempArray = ByteArray(bytesRead)
                 byteBuffer.get(tempArray)
                 outputStream.write(tempArray, 0, tempArray.size)
             }
-        } catch (_: ArchiveException) {
-            // Fin de la entrada
+        } catch (e: ArchiveException) {
+            if (e.code != Archive.ERRNO_EOF) {
+                e.printStackTrace()
+            }
         }
         return outputStream.toByteArray()
     }
