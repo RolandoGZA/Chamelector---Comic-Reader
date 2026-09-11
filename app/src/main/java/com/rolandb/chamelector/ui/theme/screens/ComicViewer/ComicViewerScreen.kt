@@ -6,9 +6,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
@@ -17,13 +17,16 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlin.math.absoluteValue
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -113,21 +116,56 @@ fun ComicViewerScreen(
 
                 uiState.pages.isNotEmpty() -> {
                     val pagerState = rememberPagerState { uiState.pages.size }
+                    var isAnyPageZoomed by remember { mutableStateOf(false) }
 
                     LaunchedEffect(pagerState.currentPage) {
                         viewModel.onPageChanged(pagerState.currentPage)
+                        isAnyPageZoomed = false
                     }
 
                     HorizontalPager(
                         state = pagerState,
-                        // Deshabilitamos el cambio de página cuando la imagen tiene zoom aplicado
-                        userScrollEnabled = true,
-                        modifier = Modifier.fillMaxSize()
+                        userScrollEnabled = !isAnyPageZoomed,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color.Black)
                     ) { pageIndex ->
-                        ZoomableComicPage(
-                            bitmap = uiState.pages[pageIndex],
-                            onTap = viewModel::toggleControlsVisibility
-                        )
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .zIndex(
+                                    // Use a snapshot flow or read in graphicsLayer to avoid composition overhead
+                                    if (pagerState.currentPage >= pageIndex) 1f else 0f
+                                )
+                                .graphicsLayer {
+                                    val pageOffset = ((pagerState.currentPage - pageIndex) + pagerState.currentPageOffsetFraction)
+                                    
+                                    // Stack pages by counter-acting the pager's natural horizontal layout
+                                    translationX = pageOffset * size.width
+
+                                    if (pageOffset > 0f && pageOffset < 1f) {
+                                        // The page being turned away
+                                        rotationY = -180f * pageOffset
+                                        transformOrigin = TransformOrigin(0f, 0.5f)
+                                        cameraDistance = 8f * density
+                                        
+                                        // Hide back of page after 90 degrees
+                                        alpha = if (pageOffset > 0.5f) 0f else 1f
+                                    } else if (pageOffset <= 0f && pageOffset > -1f) {
+                                        // The page being revealed underneath
+                                        rotationY = 0f
+                                        alpha = 1f
+                                    } else {
+                                        alpha = if (pageOffset.absoluteValue < 0.1f) 1f else 0f
+                                    }
+                                }
+                        ) {
+                            ZoomableComicPage(
+                                bitmap = uiState.pages[pageIndex],
+                                onTap = viewModel::toggleControlsVisibility,
+                                onZoomChanged = { isAnyPageZoomed = it }
+                            )
+                        }
                     }
                 }
             }
@@ -138,11 +176,16 @@ fun ComicViewerScreen(
 @Composable
 fun ZoomableComicPage(
     bitmap: android.graphics.Bitmap,
-    onTap: () -> Unit
+    onTap: () -> Unit,
+    onZoomChanged: (Boolean) -> Unit
 ) {
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(scale) {
+        onZoomChanged(scale > 1f)
+    }
 
     Box(
         modifier = Modifier
@@ -151,7 +194,6 @@ fun ZoomableComicPage(
                 detectTapGestures(
                     onTap = { onTap() },
                     onDoubleTap = {
-                        // Doble tap para restablecer o hacer zoom al 2.5x
                         if (scale > 1f) {
                             scale = 1f
                             offsetX = 0f
@@ -162,17 +204,55 @@ fun ZoomableComicPage(
                     }
                 )
             }
-            .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    scale = (scale * zoom).coerceIn(1f, 4f)
+            .pointerInput(scale) {
+                // Manual transformation detection to avoid blocking the Pager
+                awaitEachGesture {
+                    var zoom = 1f
+                    var pan = Offset.Zero
+                    var pastTouchSlop = false
+                    val touchSlop = viewConfiguration.touchSlop
 
-                    if (scale > 1f) {
-                        offsetX += pan.x
-                        offsetY += pan.y
-                    } else {
-                        offsetX = 0f
-                        offsetY = 0f
-                    }
+                    // Wait for the first down
+                    awaitFirstDown(requireUnconsumed = false)
+                    
+                    do {
+                        val event = awaitPointerEvent()
+                        val canceled = event.changes.any { it.isConsumed }
+                        
+                        if (!canceled) {
+                            val zoomChange = event.calculateZoom()
+                            val panChange = event.calculatePan()
+
+                            if (!pastTouchSlop) {
+                                zoom *= zoomChange
+                                pan += panChange
+                                val centroidSize = event.calculateCentroidSize(useCurrent = false)
+                                val zoomMotion = (zoom - 1f).absoluteValue * centroidSize
+                                val panMotion = pan.getDistance()
+
+                                if (zoomMotion > touchSlop || panMotion > touchSlop) {
+                                    pastTouchSlop = true
+                                }
+                            }
+
+                            if (pastTouchSlop) {
+                                // If scale is 1 and we are not zooming (just panning), 
+                                // we check if it's a multi-touch. 
+                                // If it's a single-touch pan at scale 1, we DON'T consume.
+                                val isMultiTouch = event.changes.size > 1
+                                if (scale > 1f || isMultiTouch) {
+                                    // Handle zoom/pan
+                                    val newScale = (scale * zoomChange).coerceIn(1f, 4f)
+                                    scale = newScale
+                                    if (scale > 1f) {
+                                        offsetX += panChange.x
+                                        offsetY += panChange.y
+                                        event.changes.forEach { it.consume() }
+                                    }
+                                }
+                            }
+                        }
+                    } while (!canceled && event.changes.any { it.pressed })
                 }
             },
         contentAlignment = Alignment.Center
@@ -182,12 +262,12 @@ fun ZoomableComicPage(
             contentDescription = "Página del cómic",
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer(
-                    scaleX = scale,
-                    scaleY = scale,
-                    translationX = offsetX,
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    translationX = offsetX
                     translationY = offsetY
-                )
+                }
         )
     }
 }
