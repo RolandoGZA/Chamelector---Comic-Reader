@@ -58,7 +58,7 @@ class ComicViewModel(application: Application) : AndroidViewModel(application) {
         folderObserver?.unregister()
         folderObserver = FolderContentObserver(
             context = getApplication(),
-            folderUri = uri
+            folderUri = uri,
         ) {
             // Se detectó una adición/modificación en la carpeta
             _selectedFolderUri.value?.let { loadComicsFromFolder(it) }

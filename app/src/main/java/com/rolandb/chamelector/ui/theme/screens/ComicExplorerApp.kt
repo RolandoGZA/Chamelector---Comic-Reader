@@ -23,7 +23,7 @@ fun ComicExplorerApp(viewModel: ComicViewModel) {
 
     // Contract para el explorador SAF
     val folderPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
+        contract = ActivityResultContracts.OpenDocumentTree(),
     ) { uri ->
         uri?.let { viewModel.onFolderSelected(it) }
     }
