@@ -8,7 +8,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
@@ -183,8 +182,11 @@ fun ZoomableComicPage(
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
 
-    LaunchedEffect(scale) {
-        onZoomChanged(scale > 1f)
+    // Use derivedStateOf to only trigger recomposition/notification when the BOOLEAN changes
+    val isZoomed by remember { derivedStateOf { scale > 1f } }
+    
+    LaunchedEffect(isZoomed) {
+        onZoomChanged(isZoomed)
     }
 
     Box(
@@ -204,55 +206,36 @@ fun ZoomableComicPage(
                     }
                 )
             }
-            .pointerInput(scale) {
-                // Manual transformation detection to avoid blocking the Pager
+            .pointerInput(Unit) {
+                // Cooperative gesture detection:
+                // We manually handle the gesture loop to decide when to consume events.
                 awaitEachGesture {
-                    var zoom = 1f
-                    var pan = Offset.Zero
-                    var pastTouchSlop = false
-                    val touchSlop = viewConfiguration.touchSlop
-
-                    // Wait for the first down
                     awaitFirstDown(requireUnconsumed = false)
-                    
                     do {
                         val event = awaitPointerEvent()
-                        val canceled = event.changes.any { it.isConsumed }
-                        
-                        if (!canceled) {
-                            val zoomChange = event.calculateZoom()
-                            val panChange = event.calculatePan()
+                        val isMultiTouch = event.changes.size > 1
+                        val zoomChange = event.calculateZoom()
+                        val panChange = event.calculatePan()
 
-                            if (!pastTouchSlop) {
-                                zoom *= zoomChange
-                                pan += panChange
-                                val centroidSize = event.calculateCentroidSize(useCurrent = false)
-                                val zoomMotion = (zoom - 1f).absoluteValue * centroidSize
-                                val panMotion = pan.getDistance()
-
-                                if (zoomMotion > touchSlop || panMotion > touchSlop) {
-                                    pastTouchSlop = true
-                                }
-                            }
-
-                            if (pastTouchSlop) {
-                                // If scale is 1 and we are not zooming (just panning), 
-                                // we check if it's a multi-touch. 
-                                // If it's a single-touch pan at scale 1, we DON'T consume.
-                                val isMultiTouch = event.changes.size > 1
-                                if (scale > 1f || isMultiTouch) {
-                                    // Handle zoom/pan
-                                    val newScale = (scale * zoomChange).coerceIn(1f, 4f)
-                                    scale = newScale
-                                    if (scale > 1f) {
-                                        offsetX += panChange.x
-                                        offsetY += panChange.y
-                                        event.changes.forEach { it.consume() }
-                                    }
-                                }
+                        // Logic: 
+                        // 1. If we are already zoomed, we handle everything (consume).
+                        // 2. If we are NOT zoomed but the user uses 2+ fingers, we start zooming (consume).
+                        // 3. If scale is 1 and it's a single finger, we DON'T consume (Pager wins).
+                        if (scale > 1f || (isMultiTouch && zoomChange != 1f)) {
+                            val newScale = (scale * zoomChange).coerceIn(1f, 4f)
+                            scale = newScale
+                            
+                            if (scale > 1f) {
+                                offsetX += panChange.x
+                                offsetY += panChange.y
+                                // Consume the event so Pager doesn't see it
+                                event.changes.forEach { it.consume() }
+                            } else {
+                                offsetX = 0f
+                                offsetY = 0f
                             }
                         }
-                    } while (!canceled && event.changes.any { it.pressed })
+                    } while (event.changes.any { it.pressed })
                 }
             },
         contentAlignment = Alignment.Center
